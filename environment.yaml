@@ -1,0 +1,19 @@
+# File modified by authors of InstructPix2Pix from original (https://github.com/CompVis/stable-diffusion).
+# See more details in LICENSE.
+
+name: uniarc
+channels:
+  - pytorch
+  - defaults
+dependencies:
+  - python=3.8.5
+  - pip=20.3
+  - cudatoolkit=11.3
+  - pytorch=1.11.0
+  - torchvision=0.12.0
+  - numpy=1.19.2
+  - pip:
+    - vit-pytorch
+    - einops
+    - odach
+    - wandb
