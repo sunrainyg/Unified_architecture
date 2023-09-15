@@ -22,15 +22,6 @@ warnings.filterwarnings("ignore")
 import pdb
 
 
-class GaussianActivation(nn.Module):
-    def __init__(self, sigma=1.0):
-        super(GaussianActivation, self).__init__()
-        self.sigma = nn.Parameter(torch.tensor(sigma))
-
-    def forward(self, x):
-        return torch.exp(-x**2 / (2 * self.sigma**2))
-
-
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
 
@@ -64,19 +55,6 @@ class DropPath(nn.Module):
 
     def forward(self, x):
         return drop_path(x, self.drop_prob, self.training)
-
-
-# class RBFNetwork(nn.Module):
-#     def __init__(self, in_features, num_centres, out_features):
-#         super(RBFNetwork, self).__init__()
-#         # self.M_RBF = torch.nn.Parameter(torch.eye(192), requires_grad=True)
-#         self.centres = nn.Parameter(torch.randn(num_centres, in_features))
-#         self.sigma = nn.Parameter(torch.tensor(1.0))
-#         self.output_layer = nn.Linear(num_centres, out_features)
-
-#     def forward(self, x): 
-        
-#         return x
 
 
 # class RBFNetwork(nn.Module):
@@ -135,8 +113,8 @@ class RBFNetwork(nn.Module):
         center_feature = center_feature or in_features
     
         self.centers = nn.Parameter(torch.randn(center_feature, in_features))
-        self.beta = nn.Parameter(torch.ones(center_feature) * 0.1)  # scale factor
-        self.fc = nn.Linear(center_feature, out_features)
+        self.beta = nn.Parameter(torch.ones(center_feature) * 0.001)  # scale factor
+        self.fc = nn.Linear(center_feature, out_features, bias=False) # set bias as false
         self.drop = nn.Dropout(drop)
 
     def radial_function(self, x): #欧式距离
@@ -145,6 +123,7 @@ class RBFNetwork(nn.Module):
         B = self.centers.pow(2).sum(dim=1)
         C = 2 * x @ self.centers.t()
         distances = A - C + B
+        print("self.beta in the rbf network", self.beta)
         return torch.exp(-self.beta.unsqueeze(0) * distances)
     
     # def radial_function(self, x): #拉普拉斯距离
@@ -161,6 +140,7 @@ class RBFNetwork(nn.Module):
         x = self.radial_function(x)
         x = self.fc(x)
         x = self.drop(x)
+        print("self.beta", self.beta)
         return x
 
 
@@ -189,7 +169,9 @@ class Hyper_Attention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         head_dim = dim // num_heads
-        self.scale = qk_scale or head_dim ** -0.5
+        # self.scale = qk_scale or head_dim ** -0.5
+        initial_scale = qk_scale if qk_scale is not None else head_dim ** -0.5
+        self.scale = nn.Parameter(torch.tensor(initial_scale))
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
@@ -209,7 +191,7 @@ class Hyper_Attention(nn.Module):
         # distance_squared = ((q.unsqueeze(-2) - k.unsqueeze(-3))).sum(dim=-1)
         # attn = -distance_squared * self.scale
         
-        ## 下面是上面这个的优化版，避免广播导致内存占用太大（？）
+        ## 下面是上面这个的优化版，避免广播导致内存占用太大
         # q_norm = (q ** 2).sum(dim=-1, keepdim=True)  # B, num_heads, N, 1
         # k_norm = (k ** 2).sum(dim=-1, keepdim=True)  # B, num_heads, 1, N
         # dot_product = q @ k.transpose(-2, -1)  # B, num_heads, N, N
@@ -218,7 +200,6 @@ class Hyper_Attention(nn.Module):
         
         ## 马氏距离版本
         # 1. Compute q^T M q
-        # import pdb;pdb.set_trace()
     
         q_M = q @ self.M
         q1 = q
@@ -239,6 +220,7 @@ class Hyper_Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
+        print("self.scale in attn layer:", self.scale)
         return x, attn, self.M
 
 
@@ -273,8 +255,8 @@ class Attention(nn.Module):
 
 
 class Hyper_Block(nn.Module):
-    def __init__(self, dim, num_heads, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
-                 drop_path=0., act_layer=GaussianActivation, norm_layer=nn.LayerNorm):
+    def __init__(self, dim, num_heads, qkv_bias=False, qk_scale=None, drop=0., attn_drop=0.,
+                 drop_path=0., norm_layer=nn.LayerNorm):
         super().__init__()
         self.norm1 = norm_layer(dim)
         self.attn = Hyper_Attention(
@@ -361,7 +343,7 @@ class Hyper_ViT(nn.Module):
         print("1")
         self.blocks = nn.ModuleList([
             Hyper_Block(
-                dim=embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio, qkv_bias=qkv_bias, qk_scale=qk_scale,
+                dim=embed_dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
@@ -483,7 +465,7 @@ class ViT(nn.Module):
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
 
-        # Classifier head
+        # Classifier headf
         self.head = nn.Linear(
             embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
@@ -775,11 +757,11 @@ if __name__ == "__main__":
         transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
     ])
 
-    trainset    = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+    trainset    = torchvision.datasets.CIFAR10(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
     trainloader = torch.utils.data.DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
-    valset      = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_val)
+    valset      = torchvision.datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
     valloader   = torch.utils.data.DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
-    testset     = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_val)
+    testset     = torchvision.datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
     testloader  = torch.utils.data.DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
 
     if args.hyperbf:
@@ -810,7 +792,6 @@ if __name__ == "__main__":
         )
         
     print_parameters_count(model)
-    centers = model.centers.detach().numpy()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
