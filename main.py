@@ -1,16 +1,17 @@
 import torch
 import numpy as np
 import math
-from functools import partial
 import torch.nn as nn
 import torch.optim as optim
 import torchvision
+import os
 import ipywidgets as widgets
 from argparse import ArgumentParser
 import torch.nn.functional as F
 import io
 from PIL import Image
-from torchvision import transforms
+from torchvision import transforms, datasets
+from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import numpy as np
 import warnings
@@ -683,6 +684,8 @@ def evaluate(loader):
 
 
 def train(epochs):
+    global best_acc
+    
     for epoch in range(epochs):
         print('\nEpoch: %d' % epoch)
         model.train()
@@ -707,6 +710,10 @@ def train(epochs):
         train_acc = 100.*correct/total
         val_acc   = evaluate(valloader)
         
+        if val_acc > best_acc:
+            best_acc = val_acc
+            torch.save(model.state_dict(), '/om2/group/cbmm/data/best_model.pth')
+            
         if args.wandb:
             wandb.log({
                 "Epoch": epoch,
@@ -718,6 +725,7 @@ def train(epochs):
         print('epoch:', epoch)
         print('Train Loss: %.3f | Train Acc: %.3f%% (%d/%d)' % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
         print('Val Acc: %.3f%%' % val_acc)
+        print('Best Acc: %.3f%%' % best_acc)
 
 def print_parameters_count(model):
     total_params = sum(p.numel() for p in model.parameters())
@@ -725,6 +733,50 @@ def print_parameters_count(model):
 
     print(f"Total parameters: {total_params}")
     print(f"Trainable parameters: {trainable_params}")
+
+
+class TinyImageNet(datasets.VisionDataset):
+    def __init__(self, root, split='train', transform=None, target_transform=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
+
+        self.split = split
+        self.data = []
+        self.targets = []
+
+        wnid_to_idx = {}
+        with open(os.path.join(root, 'wnids.txt'), 'r') as f:
+            for idx, line in enumerate(f):
+                wnid_to_idx[line.strip()] = idx
+
+        if split == 'train':
+            for wnid, idx in wnid_to_idx.items():
+                for i in range(500):
+                    path = os.path.join(root, 'train', wnid, 'images', '{}_{}.JPEG'.format(wnid, i))
+                    self.data.append(path)
+                    self.targets.append(idx)
+        elif split == 'val':
+            with open(os.path.join(root, 'val', 'val_annotations.txt'), 'r') as f:
+                for line in f:
+                    parts = line.split()
+                    path = os.path.join(root, 'val', 'images', parts[0])
+                    self.data.append(path)
+                    self.targets.append(wnid_to_idx[parts[1]])
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        path = self.data[idx]
+        target = self.targets[idx]
+        image = Image.open(path).convert('RGB')
+
+        if self.transform:
+            image = self.transform(image)
+        if self.target_transform:
+            target = self.target_transform(target)
+
+        return image, target
+
 
 if __name__ == "__main__":
     
@@ -745,25 +797,58 @@ if __name__ == "__main__":
     if device.type == "cuda":
         torch.cuda.set_device(0)
 
+
+    ## Load datasets
     transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+                    transforms.RandomCrop(32, padding=4),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                ])
 
     transform_val = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-    ])
+                    transforms.ToTensor(),
+                    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                ])
+    
+    transform_tinyimagenet_train = transforms.Compose([
+                            transforms.RandomHorizontalFlip(),
+                            transforms.RandomCrop(64, padding=4),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                            ])
+    
+    transform_tinyimagenet_val = transforms.Compose([
+                            transforms.RandomHorizontalFlip(),
+                            transforms.RandomCrop(64, padding=4),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                            ])
 
-    trainset    = torchvision.datasets.CIFAR10(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
-    valset      = torchvision.datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
-    valloader   = torch.utils.data.DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
-    testset     = torchvision.datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
-    testloader  = torch.utils.data.DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
+    if args.dataset == 'tiny_imagenet':
+        train_dataset = TinyImageNet('/om2/group/cbmm/data', split='train', transform=transform_tinyimagenet_train)
+        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4)
+        val_dataset = TinyImageNet('/om2/group/cbmm/data', split='val', transform=transform_tinyimagenet_val)
+        val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=4)
 
+    if args.dataset == 'cifar10':
+        trainset    = datasets.CIFAR10(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
+        trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
+        valset      = datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        valloader   = DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
+        testset     = datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        testloader  = DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
+    
+    if args.dataset == 'cifar100':
+        trainset    = datasets.CIFAR100(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
+        trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
+        valset      = datasets.CIFAR100(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        valloader   = DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
+        testset     = datasets.CIFAR100(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        testloader  = DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
+        
+
+    ## load models
     if args.hyperbf:
         
         model = Hyper_ViT(
@@ -796,11 +881,13 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
 
+    ## setup loss, optimizer, etc
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-4)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 10)
     scaler = torch.cuda.amp.GradScaler(enabled=False)
 
+    ## train
     train(args.epoch)
     
     test_acc = evaluate(testloader)
