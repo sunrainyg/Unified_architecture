@@ -11,7 +11,6 @@ __pycache__/
 
 # C extensions
 *.so
-slurm*
 
 # Distribution / packaging
 .Python
@@ -60,7 +59,6 @@ coverage.xml
 # Django stuff:
 *.log
 *.txt
-slurm*
 
 # Sphinx documentation
 docs/_build/

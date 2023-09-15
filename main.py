@@ -112,11 +112,13 @@ class RBFNetwork(nn.Module):
         super().__init__()
         out_features = out_features or in_features
         center_feature = center_feature or in_features
+        self.beta_mean_history = []
     
         self.centers = nn.Parameter(torch.randn(center_feature, in_features))
         self.beta = nn.Parameter(torch.ones(center_feature) * 0.001)  # scale factor
         self.fc = nn.Linear(center_feature, out_features, bias=False) # set bias as false
         self.drop = nn.Dropout(drop)
+        
 
     def radial_function(self, x): #欧式距离
         # Compute the distance from the centers
@@ -124,7 +126,10 @@ class RBFNetwork(nn.Module):
         B = self.centers.pow(2).sum(dim=1)
         C = 2 * x @ self.centers.t()
         distances = A - C + B
-        print("self.beta in the rbf network", self.beta)
+        
+        current_beta_mean = self.beta.mean().item()
+        self.beta_mean_history.append(current_beta_mean)
+        
         return torch.exp(-self.beta.unsqueeze(0) * distances)
     
     # def radial_function(self, x): #拉普拉斯距离
@@ -141,7 +146,6 @@ class RBFNetwork(nn.Module):
         x = self.radial_function(x)
         x = self.fc(x)
         x = self.drop(x)
-        print("self.beta", self.beta)
         return x
 
 
@@ -341,7 +345,6 @@ class Hyper_ViT(nn.Module):
 
         # stochastic depth decay rule
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
-        print("1")
         self.blocks = nn.ModuleList([
             Hyper_Block(
                 dim=embed_dim, num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
@@ -685,6 +688,8 @@ def evaluate(loader):
 
 def train(epochs):
     global best_acc
+    if 'best_acc' not in globals():
+        best_acc = 0
     
     for epoch in range(epochs):
         print('\nEpoch: %d' % epoch)
@@ -781,12 +786,13 @@ class TinyImageNet(datasets.VisionDataset):
 if __name__ == "__main__":
     
     parser = ArgumentParser()
-    parser.add_argument("--dataset", default='cifar10', type=str)
-    parser.add_argument("--epoch", default=5, type=int)
+    parser.add_argument("--dataset", required=True, default='cifar10', type=str)
+    parser.add_argument("--epoch", required=True, default=5, type=int)
     parser.add_argument("--vis", action='store_true', default=False, help='if doing visualization of attn. weights')
-    parser.add_argument("--patch_size", default=4, type=int)
+    parser.add_argument("--patch_size", required=True, default=4, type=int)
     parser.add_argument("--hyperbf", action='store_true', default=False, help='if using all hyperBF structures')
     parser.add_argument("--wandb", action='store_true', default=False, help='if using wandb')
+    parser.add_argument("--classes", required=True, default=10, type=int)
     args = parser.parse_args()
     
     if args.wandb:
@@ -854,7 +860,7 @@ if __name__ == "__main__":
         model = Hyper_ViT(
             image_size = 32,
             patch_size = args.patch_size,
-            num_classes = 10,
+            num_classes = args.classes,
             dim = 512,
             depth = 4,
             heads = 4,
@@ -867,7 +873,7 @@ if __name__ == "__main__":
         model = ViT(
             image_size = 32,
             patch_size = args.patch_size,
-            num_classes = 10,
+            num_classes = args.classes,
             dim = 512,
             depth = 4,
             heads = 4,
@@ -890,8 +896,14 @@ if __name__ == "__main__":
     ## train
     train(args.epoch)
     
-    test_acc = evaluate(testloader)
-    print('Test Acc: %.3f%%' % test_acc)
+    for idx, block in enumerate(model.blocks):
+        beta_mean_values = block.mlp.beta_mean_history
+        print(f"Hyper_Block {idx} beta_mean_history: {beta_mean_values}")
+
+    
+    if args.dataset == 'cifar10' or 'cifar100':
+        test_acc = evaluate(testloader)
+        print('Test Acc: %.3f%%' % test_acc)
     torch.cuda.empty_cache()
     
     if args.vis:
