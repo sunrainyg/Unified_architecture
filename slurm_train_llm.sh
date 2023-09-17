@@ -8,10 +8,5 @@
 #SBATCH --time=48:00:00
 #SBATCH --partition=cbmm
 
-python main.py \
---dataset cifar10 \
---epoch 100 \
---classes 10 \
---patch_size 4 \
---hyperbf \
+python tiny_story.py
 

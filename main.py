@@ -131,15 +131,6 @@ class RBFNetwork(nn.Module):
         self.beta_mean_history.append(current_beta_mean)
         
         return torch.exp(-self.beta.unsqueeze(0) * distances)
-    
-    # def radial_function(self, x): #拉普拉斯距离
-    #     # Compute the distance from the centers
-    #     A = x.sum(dim=-1, keepdim=True)
-    #     B = self.centers.sum(dim=1)
-    #     C = 2 * x @ self.centers.t()
-    #     distances = A - C + B
-    #     # return torch.exp(-self.beta.unsqueeze(0) * distances)
-    #     return torch.exp(0.5 * distances)
 
 
     def forward(self, x):
@@ -148,6 +139,9 @@ class RBFNetwork(nn.Module):
         x = self.drop(x)
         return x
 
+    def save_epoch_value(self):
+        current_beta_mean = self.beta.mean().item()
+        self.beta_mean_history.append(current_beta_mean)
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.ReLU, drop=0.):
@@ -173,7 +167,10 @@ class Hyper_Attention(nn.Module):
     def __init__(self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0., proj_drop=0.):
         super().__init__()
         self.num_heads = num_heads
+        self.scaler_mean_history = []
+        
         head_dim = dim // num_heads
+        
         # self.scale = qk_scale or head_dim ** -0.5
         initial_scale = qk_scale if qk_scale is not None else head_dim ** -0.5
         self.scale = nn.Parameter(torch.tensor(initial_scale))
@@ -225,8 +222,11 @@ class Hyper_Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        print("self.scale in attn layer:", self.scale)
         return x, attn, self.M
+
+    def save_epoch_value(self):
+        value_to_save = self.scale.mean().item()
+        self.scaler_mean_history.append(value_to_save)
 
 
 class Attention(nn.Module):
@@ -691,6 +691,9 @@ def train(epochs):
     if 'best_acc' not in globals():
         best_acc = 0
     
+    beta_mean_history_list      = []
+    scaler_mean_history_list    = []
+    
     for epoch in range(epochs):
         print('\nEpoch: %d' % epoch)
         model.train()
@@ -715,10 +718,21 @@ def train(epochs):
         train_acc = 100.*correct/total
         val_acc   = evaluate(valloader)
         
+        model.blocks[0].attn.save_epoch_value()
+        model.blocks[0].mlp.save_epoch_value()
+        
+        for idx, block in enumerate(model.blocks):
+            if idx == 0:
+                beta_mean_history   = [sum(block.mlp.beta_mean_history) / len(block.mlp.beta_mean_history)]
+                scaler_mean_history = [sum(block.attn.scaler_mean_history) / len(block.attn.scaler_mean_history)]
+        
+        beta_mean_history_list.append(beta_mean_history)
+        scaler_mean_history_list.append(scaler_mean_history)
+        
         if val_acc > best_acc:
             best_acc = val_acc
             torch.save(model.state_dict(), '/om2/group/cbmm/data/best_model.pth')
-            
+
         if args.wandb:
             wandb.log({
                 "Epoch": epoch,
@@ -731,6 +745,7 @@ def train(epochs):
         print('Train Loss: %.3f | Train Acc: %.3f%% (%d/%d)' % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
         print('Val Acc: %.3f%%' % val_acc)
         print('Best Acc: %.3f%%' % best_acc)
+    return beta_mean_history_list, scaler_mean_history_list
 
 def print_parameters_count(model):
     total_params = sum(p.numel() for p in model.parameters())
@@ -894,11 +909,17 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=False)
 
     ## train
-    train(args.epoch)
+    beta, scaler = train(args.epoch)
     
-    for idx, block in enumerate(model.blocks):
-        beta_mean_values = block.mlp.beta_mean_history
-        print(f"Hyper_Block {idx} beta_mean_history: {beta_mean_values}")
+    print("beta:", beta)
+    print("scaler:", scaler)
+    
+    # for idx, block in enumerate(model.blocks):
+    #     if idx == 0:
+    #         beta_mean_history = [sum(block.mlp.beta_mean_history) / len(block.mlp.beta_mean_history)]
+    #         scaler_mean_history = block.attn.scaler_mean_history
+    #         print(f"Hyper_Block {idx} beta_mean_history: {beta_mean_history}")
+    #         print(f"Block {idx + 1} scaler_mean_history:{block.attn.scaler_mean_history}")
 
     
     if args.dataset == 'cifar10' or 'cifar100':
