@@ -110,7 +110,7 @@ class PositionalEncoding(nn.Module):
   def forward(self, x):
     return x + self.encoding
   
-class MultiHeadSelfAttention(nn.Module):
+class RBF_MultiHeadSelfAttention(nn.Module):
   def __init__(self, d_model, num_heads, dropout):
     super().__init__()
 
@@ -122,6 +122,7 @@ class MultiHeadSelfAttention(nn.Module):
     self.query = nn.Linear(d_model, d_model)
     self.key = nn.Linear(d_model, d_model)
     self.value = nn.Linear(d_model, d_model)
+    self.M = nn.Parameter(torch.randn(self.head_dim, self.head_dim))
 
     # Output linear layer for each head
     self.out = nn.Linear(d_model, d_model)
@@ -139,8 +140,22 @@ class MultiHeadSelfAttention(nn.Module):
     V = self.value(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2); V = self.dropout(V)
 
     # Calculate attention scores and attention weights for each head with scaling factor
-    scores = torch.matmul(Q, K.transpose(-1, -2)) / (self.head_dim ** 0.5)
-
+    # scores = torch.matmul(Q, K.transpose(-1, -2)) / (self.head_dim ** 0.5) # original
+    
+    ## Mahalanobis distance calculation
+    # 1. Compute q^T M q
+    q_M = Q @ self.M
+    qMq = (Q * q_M).sum(dim=-1, keepdim=True)  # B, num_heads, N, 1
+    # 2. Compute k^T M k
+    k_M = K @ self.M
+    kMk = (K * k_M).sum(dim=-1, keepdim=True).transpose(-2, -1)  # B, num_heads, 1, N
+    # 3. Compute -2 q^T M k
+    qMk = q_M @ K.transpose(-2, -1)  # B, num_heads, N, N
+    negative_2qMk = -2 * qMk
+    # Combine all components to get Mahalanobis distance
+    dists = qMq + kMk + negative_2qMk
+    scores = -dists * (self.head_dim ** 0.5)
+    
     attention_weights = torch.softmax(scores, dim=-1)
     attended_values = torch.matmul(attention_weights, V)
 
@@ -156,6 +171,41 @@ class MultiHeadSelfAttention(nn.Module):
     return output, attention_weights.detach()
 
 #@title `FeedForward` class
+
+class RBF_FeedForward(nn.Module):
+    def __init__(self, d_model, center_feature, dropout=0.):
+        super().__init__()
+
+        self.beta_mean_history = []
+        
+        center_feature = int(50)
+        
+        # RBF Layer
+        self.centers = nn.Parameter(torch.randn(center_feature, d_model))
+        self.beta = nn.Parameter(torch.ones(center_feature) * 0.001)  # scale factor
+        self.fc = nn.Linear(center_feature, d_model, bias=False) # set bias as false
+
+        # Weights normalization
+        nn.init.kaiming_normal_(self.fc.weight, nonlinearity='relu')
+
+    def radial_function(self, x):
+        # Compute the distance from the centers
+        A = x.pow(2).sum(dim=-1, keepdim=True)
+        B = self.centers.pow(2).sum(dim=1)
+        C = 2 * x @ self.centers.t()
+        distances = A - C + B
+        
+        current_beta_mean = self.beta.mean().item()
+        self.beta_mean_history.append(current_beta_mean)
+        
+        return torch.exp(-self.beta.unsqueeze(0) * distances)
+
+    def forward(self, x):
+        rbf_out = self.radial_function(x)
+        rbf_out = self.fc(rbf_out)
+        return rbf_out
+
+
 class FeedForward(nn.Module):
   def __init__(self, d_model, d_ff, dropout):
     super().__init__()
@@ -189,8 +239,8 @@ class MHDecoderTransformer(nn.Module):
     # Classes
     self.embedding = TokenEmbedding(d_model, vocab_size, dropout).to(device)
     self.posencoding = PositionalEncoding(d_model, maxlen).to(device)
-    self.sequential_attention = [MultiHeadSelfAttention(d_model, n_heads, dropout).to(device) for _ in range(n_att)]
-    self.neuralnet = FeedForward(d_model, d_ff, dropout).to(device)
+    self.sequential_attention = [RBF_MultiHeadSelfAttention(d_model, n_heads, dropout).to(device) for _ in range(n_att)]
+    self.neuralnet = RBF_FeedForward(d_model, d_ff, dropout).to(device)
 
     self.flatten = lambda x: x.view(x.size(0), -1)
     self.out = nn.Linear(maxlen * d_model, vocab_size)
@@ -269,7 +319,7 @@ def apply_temperature(logits, temperature=1.0):
     return logits / temperature
 
 if __name__ == '__main__':
-    BATCH_SIZE = 256
+    BATCH_SIZE = 2048
     D_MODEL = 256
     VOCAB_SIZE = len(word2index)
     MAXLEN = 32
@@ -277,7 +327,12 @@ if __name__ == '__main__':
     D_HIDDEN = 512
     N_ATT = 8
     DROPOUT = .1
-    lr = 3e-4
+    lr = 3e-4 * 5
+    
+    epochs = 50
+    print_loss = 100
+    plot_loss = 100
+    loss_list = []
 
     Optimus = MHDecoderTransformer(D_MODEL, MAXLEN, VOCAB_SIZE, DROPOUT, NUM_HEADS, D_HIDDEN, N_ATT).to(device)
 
@@ -287,14 +342,9 @@ if __name__ == '__main__':
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(params=Optimus.parameters(), lr=lr)
     
-    trainloader = get_dataloader(normalized_stories[:5000], BATCH_SIZE, MAXLEN)
+    trainloader = get_dataloader(normalized_stories[:24000], BATCH_SIZE, MAXLEN)
     testloader = get_dataloader(normalized_stories[24000:], 32, MAXLEN)
     print("Data is successfully loaded!")
-
-    epochs = 1
-    print_loss = 100
-    plot_loss = 100
-    loss_list = []
 
     # Training loop
     for epoch in tqdm(range(1, epochs+1)):
@@ -306,9 +356,9 @@ if __name__ == '__main__':
         validation_loss = eval_model(Optimus, testloader)
         print(f'Validation loss = {validation_loss:.5f}')
     
-    # Save model's weights
-    PATH = '/om2/group/cbmm/data/llm_transformer_epoch1.pth'
-    torch.save(Optimus.state_dict(), PATH)
+        # Save model's weights
+        PATH = '/om2/group/cbmm/data/llm_hyperbf_epoch50_bs2048.pth'
+        torch.save(Optimus.state_dict(), PATH)
 
     # inference
     input, target = next(iter(testloader))

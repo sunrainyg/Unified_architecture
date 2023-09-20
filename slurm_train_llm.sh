@@ -8,5 +8,5 @@
 #SBATCH --time=48:00:00
 #SBATCH --partition=cbmm
 
-python tiny_story.py
+python tiny_story_hyperbf.py
 

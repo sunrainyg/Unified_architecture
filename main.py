@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torchvision
 import os
+import misc as utils
 import ipywidgets as widgets
 from argparse import ArgumentParser
 import torch.nn.functional as F
@@ -12,6 +13,8 @@ import io
 from PIL import Image
 from torchvision import transforms, datasets
 from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
 import matplotlib.pyplot as plt
 import numpy as np
 import warnings
@@ -118,7 +121,7 @@ class RBFNetwork(nn.Module):
         self.beta = nn.Parameter(torch.ones(center_feature) * 0.001)  # scale factor
         self.fc = nn.Linear(center_feature, out_features, bias=False) # set bias as false
         self.drop = nn.Dropout(drop)
-        
+
 
     def radial_function(self, x): #欧式距离
         # Compute the distance from the centers
@@ -142,6 +145,7 @@ class RBFNetwork(nn.Module):
     def save_epoch_value(self):
         current_beta_mean = self.beta.mean().item()
         self.beta_mean_history.append(current_beta_mean)
+
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.ReLU, drop=0.):
@@ -269,7 +273,7 @@ class Hyper_Block(nn.Module):
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(20)
+        mlp_hidden_dim = int(1500)
         self.mlp = RBFNetwork(dim, mlp_hidden_dim, dim)
 
     def forward(self, x, return_attention=False):
@@ -328,14 +332,14 @@ class PatchEmbed(nn.Module):
 class Hyper_ViT(nn.Module):
     """ Vision Transformer """
 
-    def __init__(self, img_size=[224], patch_size=4, in_chans=3, num_classes=10, embed_dim=768, depth=4,
+    def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=10, embed_dim=768, depth=4,
                  num_heads=4, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
                  drop_path_rate=0., norm_layer=nn.LayerNorm, **kwargs):
         super().__init__()
         self.num_features = self.embed_dim = embed_dim
 
         self.patch_embed = PatchEmbed(
-            img_size=img_size[0], patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
+            img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -411,7 +415,7 @@ class Hyper_ViT(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x) # torch.Size([256, 65, 768])
-        return x[:, 0]
+        return self.head(x[:, 0])
 
     def get_last_selfattention(self, x):
         x = self.prepare_tokens(x)
@@ -528,7 +532,7 @@ class ViT(nn.Module):
         for blk in self.blocks:
             x = blk(x)
         x = self.norm(x)
-        return x[:, 0]
+        return self.head(x[:, 0])
 
     def get_last_selfattention(self, x):
         x = self.prepare_tokens(x)
@@ -693,7 +697,6 @@ def train(epochs):
     
     beta_mean_history_list      = []
     scaler_mean_history_list    = []
-    
     for epoch in range(epochs):
         print('\nEpoch: %d' % epoch)
         model.train()
@@ -701,6 +704,8 @@ def train(epochs):
         correct = 0
         total = 0
         for batch_idx, (inputs, targets) in enumerate(trainloader):
+            print(f"Processing batch {batch_idx+1}/{len(trainloader)}", end="\r")
+
             inputs, targets = inputs.to(device), targets.to(device)
             with torch.cuda.amp.autocast(enabled=False):
                 outputs = model(inputs)
@@ -718,16 +723,18 @@ def train(epochs):
         train_acc = 100.*correct/total
         val_acc   = evaluate(valloader)
         
-        model.blocks[0].attn.save_epoch_value()
-        model.blocks[0].mlp.save_epoch_value()
+        ## print beta and scaler; need to add "module" when using DDP
+        # if args.hyperbf:
+        #     model.blocks[0].attn.save_epoch_value()
+        #     model.blocks[0].mlp.save_epoch_value()
         
-        for idx, block in enumerate(model.blocks):
-            if idx == 0:
-                beta_mean_history   = [sum(block.mlp.beta_mean_history) / len(block.mlp.beta_mean_history)]
-                scaler_mean_history = [sum(block.attn.scaler_mean_history) / len(block.attn.scaler_mean_history)]
+        #     for idx, block in enumerate(model.blocks):
+        #         if idx == 0:
+        #             beta_mean_history   = [sum(block.mlp.beta_mean_history) / len(block.mlp.beta_mean_history)]
+        #             scaler_mean_history = [sum(block.attn.scaler_mean_history) / len(block.attn.scaler_mean_history)]
         
-        beta_mean_history_list.append(beta_mean_history)
-        scaler_mean_history_list.append(scaler_mean_history)
+        #     beta_mean_history_list.append(beta_mean_history)
+        #     scaler_mean_history_list.append(scaler_mean_history)
         
         if val_acc > best_acc:
             best_acc = val_acc
@@ -746,6 +753,7 @@ def train(epochs):
         print('Val Acc: %.3f%%' % val_acc)
         print('Best Acc: %.3f%%' % best_acc)
     return beta_mean_history_list, scaler_mean_history_list
+
 
 def print_parameters_count(model):
     total_params = sum(p.numel() for p in model.parameters())
@@ -805,18 +813,24 @@ if __name__ == "__main__":
     parser.add_argument("--epoch", required=True, default=5, type=int)
     parser.add_argument("--vis", action='store_true', default=False, help='if doing visualization of attn. weights')
     parser.add_argument("--patch_size", required=True, default=4, type=int)
+    parser.add_argument("--image_size", required=True, default=32, type=int)
     parser.add_argument("--hyperbf", action='store_true', default=False, help='if using all hyperBF structures')
     parser.add_argument("--wandb", action='store_true', default=False, help='if using wandb')
     parser.add_argument("--classes", required=True, default=10, type=int)
+    parser.add_argument("--train_batch", required=True, default=256, type=int)
+    #Device options
+    parser.add_argument('--device', default='cuda',
+                        help='device to use for training / testing')
+    parser.add_argument('--world_size', default=1, type=int,
+                        help='number of distributed processes')
+    parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
     args = parser.parse_args()
     
     if args.wandb:
         wandb.init(project="vit_new")
-    
-    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-    
-    if device.type == "cuda":
-        torch.cuda.set_device(0)
+        
+    utils.init_distributed_mode(args)
+    print("git:\n  {}\n".format(utils.get_sha()))
 
 
     ## Load datasets
@@ -845,13 +859,39 @@ if __name__ == "__main__":
                             transforms.ToTensor(),
                             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                             ])
+    
+    transform_imagenet = transforms.Compose([
+                            transforms.RandomResizedCrop(224),
+                            transforms.RandomHorizontalFlip(),
+                            transforms.ToTensor(),
+                            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                        ])
 
     if args.dataset == 'tiny_imagenet':
         train_dataset = TinyImageNet('/om2/group/cbmm/data', split='train', transform=transform_tinyimagenet_train)
-        train_loader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4)
+        trainloader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4)
         val_dataset = TinyImageNet('/om2/group/cbmm/data', split='val', transform=transform_tinyimagenet_val)
-        val_loader = DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=4)
+        valloader = DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=4)
 
+    if args.dataset == 'imagenet':
+        print("loading the imagenet dataset")
+        trainset = datasets.ImageFolder(root='/om/data/public/imagenet/images_complete/ilsvrc/train', transform=transform_imagenet)
+        valset = datasets.ImageFolder(root='/om/data/public/imagenet/images_complete/ilsvrc/val', transform=transform_imagenet)
+        
+        if args.distributed:
+            train_sampler = DistributedSampler(trainset)
+            val_sampler = DistributedSampler(valset)
+            
+            trainloader = DataLoader(trainset, batch_size=args.train_batch, sampler=train_sampler, num_workers=8)
+            valloader = DataLoader(valset, batch_size=args.train_batch, sampler=val_sampler, num_workers=8)
+        
+        else:
+            trainloader = DataLoader(trainset, batch_size=args.train_batch, shuffle=True, num_workers=8)
+            valloader = DataLoader(valset, batch_size=args.train_batch, shuffle=False, num_workers=8)
+        
+        print("successfully loaded the dataset!")
+    
+    
     if args.dataset == 'cifar10':
         trainset    = datasets.CIFAR10(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
         trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
@@ -873,7 +913,7 @@ if __name__ == "__main__":
     if args.hyperbf:
         
         model = Hyper_ViT(
-            image_size = 32,
+            image_size = args.image_size,
             patch_size = args.patch_size,
             num_classes = args.classes,
             dim = 512,
@@ -886,7 +926,7 @@ if __name__ == "__main__":
         
     else:
         model = ViT(
-            image_size = 32,
+            image_size = args.image_size,
             patch_size = args.patch_size,
             num_classes = args.classes,
             dim = 512,
@@ -896,11 +936,16 @@ if __name__ == "__main__":
             dropout = 0.1,
             emb_dropout = 0.1
         )
-        
-    print_parameters_count(model)
-
+    print("model loaded!!")
+    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+    print(f"Model is on: {next(model.parameters()).device}")
+    
+    if args.distributed:
+        model       = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model       = DDP(model, device_ids=[args.gpu])
+    print_parameters_count(model)
 
     ## setup loss, optimizer, etc
     criterion = nn.CrossEntropyLoss()
@@ -909,6 +954,7 @@ if __name__ == "__main__":
     scaler = torch.cuda.amp.GradScaler(enabled=False)
 
     ## train
+    print("start to train!")
     beta, scaler = train(args.epoch)
     
     print("beta:", beta)
