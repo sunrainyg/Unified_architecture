@@ -23,8 +23,6 @@ import matplotlib.pyplot as plt
 import wandb
 warnings.filterwarnings("ignore")
 
-import pdb
-
 
 def trunc_normal_(tensor, mean=0., std=1., a=-2., b=2.):
     return _no_grad_trunc_normal_(tensor, mean, std, a, b)
@@ -50,8 +48,6 @@ def drop_path(x, drop_prob: float = 0., training: bool = False):
 
 
 class DropPath(nn.Module):
-    """Drop paths (Stochastic Depth) per sample  (when applied in main path of residual blocks).
-    """
 
     def __init__(self, drop_prob=None):
         super(DropPath, self).__init__()
@@ -61,55 +57,6 @@ class DropPath(nn.Module):
         return drop_path(x, self.drop_prob, self.training)
 
 
-# class RBFNetwork(nn.Module):
-#     def __init__(self, in_features, hidden_features=None, out_features=None):
-#         super().__init__()
-#         out_features = out_features or in_features
-#         hidden_features = hidden_features or in_features
-        
-#         self.M_RBF = nn.Parameter(torch.eye(768), requires_grad=True)
-#         self.centers = nn.Parameter(torch.randn(hidden_features, in_features))
-#         self.beta = nn.Parameter(torch.ones(hidden_features) * 0.1)  # scale factor
-#         self.L  = nn.Parameter(torch.randn(in_features, in_features))
-        
-#         self.fc1 = nn.Linear(hidden_features, hidden_features)
-#         self.fc2 = nn.Linear(hidden_features, out_features)
-
-#     def radial_function(self, x): #欧式距离
-#         # Compute the distance from the centers
-#         A = x.pow(2).sum(dim=-1, keepdim=True)
-#         B = self.centers.pow(2).sum(dim=1)
-#         C = 2 * x @ self.centers.t()
-#         distances = A - C + B
-#         return torch.exp(-self.beta.unsqueeze(0) * distances)
-
-    # def radial_function(self, x): #马氏距离
-    #     # Compute the Mahalanobis distance from the centers using the decomposition method
-
-    #     # 1. Compute x^T M x
-    #     x_M = x @ self.M_RBF
-    #     xMx = (x * x_M).sum(dim=-1, keepdim=True)  # Assuming x is of shape [batch_size, dim]
-
-    #     # 2. Compute centers^T M centers
-    #     centers_M = self.centers @ self.M_RBF
-    #     centersMcenters = (self.centers * centers_M).sum(dim=-1)  # Assuming centers is of shape [num_centers, dim]
-
-    #     # 3. Compute -2 x^T M centers
-    #     xMcenters = x_M @ self.centers.t()  # Assuming x is of shape [batch_size, dim] and centers is of shape [num_centers, dim]
-    #     negative_2xMcenters = -2 * xMcenters
-
-    #     # Combine all components to get Mahalanobis distance
-    #     distances = xMx + centersMcenters + negative_2xMcenters
-
-    #     return torch.exp(-self.beta.unsqueeze(0) * distances)
-
-
-    # def forward(self, x):
-    #     x = self.radial_function(x)
-    #     x = F.relu(self.fc1(x))
-    #     x = self.fc2(x)
-    #     return x
-
 class RBFNetwork(nn.Module):
     def __init__(self, in_features, center_feature=None, out_features=None, drop=0.):
         super().__init__()
@@ -118,14 +65,13 @@ class RBFNetwork(nn.Module):
         self.beta_mean_history = []
     
         self.centers = nn.Parameter(torch.randn(center_feature, in_features))
-        self.M_RBF = nn.Parameter(torch.eye(768), requires_grad=True)
-        self.beta = nn.Parameter(torch.ones(center_feature) * 0.1)  # scale factor
-        self.fc = nn.Linear(center_feature, out_features) # set bias as false
+        self.beta = nn.Parameter(torch.ones(center_feature) * 0.01)
+        self.fc = nn.Linear(center_feature, out_features)
         self.drop = nn.Dropout(drop)
 
 
-    def radial_function(self, x): #欧式距离
-        # Compute the distance from the centers
+    def radial_function(self, x):
+        
         A = x.pow(2).sum(dim=-1, keepdim=True)
         B = self.centers.pow(2).sum(dim=1)
         C = 2 * x @ self.centers.t()
@@ -135,34 +81,6 @@ class RBFNetwork(nn.Module):
         self.beta_mean_history.append(current_beta_mean)
         
         return torch.exp(-self.beta.unsqueeze(0) * distances)
-
-    def radial_function_ma(self, x): #马氏距离
-
-        # 1. Compute x^T M x
-        x_M = x @ self.M_RBF
-        xMx = (x * x_M).sum(dim=-1, keepdim=True)  # Assuming x is of shape [batch_size, dim]
-
-        # 2. Compute centers^T M centers
-        centers_M = self.centers @ self.M_RBF
-        centersMcenters = (self.centers * centers_M).sum(dim=-1)  # Assuming centers is of shape [num_centers, dim]
-
-        # 3. Compute -2 x^T M centers
-        xMcenters = x_M @ self.centers.t()  # Assuming x is of shape [batch_size, dim] and centers is of shape [num_centers, dim]
-        negative_2xMcenters = -2 * xMcenters
-
-        # Combine all components to get Mahalanobis distance
-        distances = xMx + centersMcenters + negative_2xMcenters
-
-        return torch.exp(-self.beta.unsqueeze(0) * distances)
-
-    def average_distance(centers):
-        n = centers.size(0)
-        dists = torch.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    dists[i, j] = torch.norm(centers[i] - centers[j])
-        return dists.sum() / (n * (n - 1))
 
 
     def forward(self, x):
@@ -187,12 +105,12 @@ class Mlp(nn.Module):
         self.fc2 = nn.Linear(hidden_features, out_features)
         self.drop = nn.Dropout(drop)
 
-    def forward(self, x): # x: ([256, 65, 768])
-        x = self.fc1(x) # x: ([256, 65, 3072])
-        x = self.act(x) # x: ([256, 65, 3072])
-        # x = self.drop(x) # x: ([256, 65, 3072])
-        x = self.fc2(x) # x: ([256, 65, 768])
-        # x = self.drop(x) # x: ([256, 65, 768])
+    def forward(self, x):
+        x = self.fc1(x)
+        x = self.act(x)
+        x = self.drop(x)
+        x = self.fc2(x)
+        x = self.drop(x)
         return x
 
 
@@ -219,43 +137,15 @@ class Hyper_Attention(nn.Module):
                                   self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        ## 内积版本
-        # attn = (q @ k.transpose(-2, -1)) * self.scale
-        
-        ## 欧式距离版本
-        # distance_squared = ((q.unsqueeze(-2) - k.unsqueeze(-3))).sum(dim=-1)
-        # attn = -distance_squared * self.scale
-        
-        ## 下面是上面这个的优化版，避免广播导致内存占用太大
-        # q_norm = (q ** 2).sum(dim=-1, keepdim=True)  # B, num_heads, N, 1
-        # k_norm = (k ** 2).sum(dim=-1, keepdim=True)  # B, num_heads, 1, N
-        # dot_product = q @ k.transpose(-2, -1)  # B, num_heads, N, N
-        # dists = q_norm + k_norm.transpose(-2, -1) - 2 * dot_product
-        # attn = -dists * self.scale
-        
-        ## 马氏距离版本
-        # 1. Compute q^T M q
-    
-        q_M = q @ self.M
-        q1 = q
-        qMq = (q * q_M).sum(dim=-1, keepdim=True)  # B, num_heads, N, 1
-        # 2. Compute k^T M k
-        k_M = k @ self.M
-        kMk = (k * k_M).sum(dim=-1, keepdim=True).transpose(-2, -1)  # B, num_heads, 1, N
-        # 3. Compute -2 q^T M k
-        qMk = q_M @ k.transpose(-2, -1)  # B, num_heads, N, N
-        negative_2qMk = -2 * qMk
-        # Combine all components to get Mahalanobis distance
-        dists = qMq + kMk + negative_2qMk
-        attn = -dists * self.scale # I don't think we need to scale it
-        # attn = -dists
+        distance_squared = ((q.unsqueeze(-2) - k.unsqueeze(-3))).sum(dim=-1)
+        attn = -distance_squared * self.scale
         
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn, self.M
+        return x
 
     def save_epoch_value(self):
         value_to_save = self.scale.mean().item()
@@ -281,7 +171,6 @@ class Attention(nn.Module):
                                   self.num_heads).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]
         
-        ## 内积版本
         attn = (q @ k.transpose(-2, -1)) * self.scale
         
         attn = attn.softmax(dim=-1)
@@ -289,7 +178,7 @@ class Attention(nn.Module):
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x, attn, self.M
+        return x
 
 
 class Hyper_Block(nn.Module):
@@ -305,10 +194,8 @@ class Hyper_Block(nn.Module):
         mlp_hidden_dim = int(1500)
         self.mlp = RBFNetwork(dim, mlp_hidden_dim, dim)
 
-    def forward(self, x, return_attention=False):
-        y, attn, Ma = self.attn(self.norm1(x))
-        if return_attention:
-            return attn, Ma
+    def forward(self, x):
+        y = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
@@ -328,10 +215,8 @@ class Block(nn.Module):
         self.mlp = Mlp(in_features=dim, hidden_features=mlp_hidden_dim,
                        act_layer=act_layer, drop=drop)
 
-    def forward(self, x, return_attention=False):
-        y, attn, Ma = self.attn(self.norm1(x))
-        if return_attention:
-            return attn, Ma
+    def forward(self, x):
+        y = self.attn(self.norm1(x))
         x = x + self.drop_path(y)
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         
@@ -339,9 +224,6 @@ class Block(nn.Module):
 
 
 class PatchEmbed(nn.Module):
-    """ Image to Patch Embedding
-    """
-
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768):
         super().__init__()
         num_patches = (img_size // patch_size) * (img_size // patch_size)
@@ -359,7 +241,6 @@ class PatchEmbed(nn.Module):
 
 
 class Hyper_ViT(nn.Module):
-    """ Vision Transformer """
 
     def __init__(self, img_size=224, patch_size=4, in_chans=3, num_classes=10, embed_dim=768, depth=4,
                  num_heads=4, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
@@ -446,37 +327,8 @@ class Hyper_ViT(nn.Module):
         x = self.norm(x) # torch.Size([256, 65, 768])
         return self.head(x[:, 0])
 
-    def get_last_selfattention(self, x):
-        x = self.prepare_tokens(x)
-        for i, blk in enumerate(self.blocks):
-            if i < len(self.blocks) - 1:
-                x = blk(x)
-            else:
-                # return attention of the last block
-                return blk(x, return_attention=True)
-
-    def get_first_selfattention(self, x):
-      x = self.prepare_tokens(x)
-      for i, blk in enumerate(self.blocks):
-            if i == 0:
-            # return attention of the first block
-              return blk(x, return_attention=True)
-            x = blk(x)
-
-
-    def get_intermediate_layers(self, x, n=1):
-        x = self.prepare_tokens(x)
-        # we return the output tokens from the `n` last blocks
-        output = []
-        for i, blk in enumerate(self.blocks):
-            x = blk(x)
-            if len(self.blocks) - i <= n:
-                output.append(self.norm(x))
-        return output
-
 
 class ViT(nn.Module):
-    """ Vision Transformer """
 
     def __init__(self, img_size=[224], patch_size=4, in_chans=3, num_classes=10, embed_dim=768, depth=4,
                  num_heads=4, mlp_ratio=4., qkv_bias=False, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
@@ -563,100 +415,11 @@ class ViT(nn.Module):
         x = self.norm(x)
         return self.head(x[:, 0])
 
-    def get_last_selfattention(self, x):
-        x = self.prepare_tokens(x)
-        for i, blk in enumerate(self.blocks):
-            if i < len(self.blocks) - 1:
-                x = blk(x)
-            else:
-                # return attention of the last block
-                return blk(x, return_attention=True)
-
-    def get_first_selfattention(self, x):
-      x = self.prepare_tokens(x)
-      for i, blk in enumerate(self.blocks):
-            if i == 0:
-            # return attention of the first block
-              return blk(x, return_attention=True)
-            x = blk(x)
-
-
-    def get_intermediate_layers(self, x, n=1):
-        x = self.prepare_tokens(x)
-        # we return the output tokens from the `n` last blocks
-        output = []
-        for i, blk in enumerate(self.blocks):
-            x = blk(x)
-            if len(self.blocks) - i <= n:
-                output.append(self.norm(x))
-        return output
-
 
 def transform(img, img_size):
     img = transforms.Resize(img_size)(img)
     img = transforms.ToTensor()(img)
     return img
-
-
-def visualize_predict(model, img, img_size, patch_size, device):
-    img_pre = transform(img, img_size)
-    attention, ma = visualize_attention(model, img_pre, patch_size, device)
-    plot_attention(img, attention)
-    return ma
-
-
-def visualize_attention(model, img, patch_size, device):
-    # make the image divisible by the patch size
-    w, h = img.shape[1] - img.shape[1] % patch_size, img.shape[2] - \
-        img.shape[2] % patch_size
-    img = img[:, :w, :h].unsqueeze(0)
-
-    w_featmap = img.shape[-2] // patch_size
-    h_featmap = img.shape[-1] // patch_size
-
-    attentions, ma = model.get_last_selfattention(img.to(device))
-
-    nh = attentions.shape[1]  # number of head
-
-    # keep only the output patch attention
-    attentions = attentions[0, :, 0, 1:].reshape(nh, -1)
-    # import pdb;pdb.set_trace()
-    attentions = attentions.reshape(nh, w_featmap, h_featmap)
-
-    if device == torch.device("cpu"):
-        attentions = nn.functional.interpolate(attentions.unsqueeze(
-            0), scale_factor=patch_size, mode="nearest")[0].cpu().detach().numpy()
-    else:
-        attentions = nn.functional.interpolate(attentions.unsqueeze(
-            0), scale_factor=patch_size, mode="nearest")[0].cpu().numpy()
-
-    return attentions, ma
-
-
-def plot_attention(img, attention):
-    n_heads = attention.shape[0]
-
-    # Compute rows and cols for subplots
-    cols = 3
-    rows = (n_heads + cols - 1) // cols  # This ensures enough rows to fit all heads
-
-    plt.figure(figsize=(12, 10))
-    text = ["Original Image", "Head Mean"]
-    for i, fig in enumerate([img, np.mean(attention, 0)]):
-        ax = plt.subplot(1, 2, i+1)
-        cax = plt.imshow(fig, cmap='viridis')
-        plt.title(text[i])
-        plt.colorbar(cax, ax=ax, fraction=0.036, pad=0.04)  # fraction and pad help adjust the size and position of colorbar
-    plt.savefig('attention_1.png')  # Save the figure before calling show
-
-    plt.figure(figsize=(12, 10))
-    for i in range(n_heads):
-        ax = plt.subplot(rows, cols, i+1)
-        cax = plt.imshow(attention[i], cmap='viridis')
-        plt.title(f"Head n: {i+1}")
-        plt.colorbar(cax, ax=ax, fraction=0.036, pad=0.04)
-    plt.tight_layout()
-    plt.savefig('attention_2.png')  # Save the figure before calling show
 
 
 class Loader(object):
@@ -683,26 +446,6 @@ class Loader(object):
             for uploaded_filename in self.uploader.value:
                 content = self.uploader.value[uploaded_filename]['content']
                 output_file.write(content)
-
-
-def visualize_and_save_matrix(M, filename="matrix_heatmap.png"):
-    plt.figure(figsize=(10, 10))  # Adjust the figure size as necessary
-    
-    # Display the heatmap
-    im = plt.imshow(M, cmap="viridis", aspect="auto")  # Choose an appropriate colormap, 'viridis' is just one example
-    
-    # Add a colorbar
-    plt.colorbar(im)
-    
-    # Optional: Add title and labels if needed
-    plt.title("Heatmap of Matrix M")
-    plt.xlabel("Dimension 1")
-    plt.ylabel("Dimension 2")
-    
-    # Save the figure
-    plt.tight_layout()
-    plt.savefig(filename)
-    plt.close()
 
 
 def evaluate(loader):
@@ -736,8 +479,8 @@ def train(model, epochs):
     beta_mean_history_list      = []
     scaler_mean_history_list    = []
     for epoch in range(epochs):
-        # if epoch < 10:
-        #     scheduler_warmup.step()
+        if epoch < 10:
+            scheduler_warmup.step()
         
         current_lrs = get_lr(optimizer)
         print("Current Learning Rates:", current_lrs)
@@ -767,28 +510,12 @@ def train(model, epochs):
         
         train_acc = 100.*correct/total
         val_acc, val_loss   = evaluate(valloader)
-        # scheduler_plateau.step(val_loss)
-        ## print beta and scaler; need to add "module" when using DDP
-        # if args.hyperbf:
-        #     model.blocks[0].attn.save_epoch_value()
-        #     model.blocks[0].mlp.save_epoch_value()
-        
-        #     for idx, block in enumerate(model.blocks):
-        #         if idx == 0:
-        #             beta_mean_history   = [sum(block.mlp.beta_mean_history) / len(block.mlp.beta_mean_history)]
-        #             scaler_mean_history = [sum(block.attn.scaler_mean_history) / len(block.attn.scaler_mean_history)]
-        
-        #     beta_mean_history_list.append(beta_mean_history)
-        #     scaler_mean_history_list.append(scaler_mean_history)
+        scheduler_plateau.step(val_loss)
         
         if val_acc > best_acc:
             best_acc = val_acc
-            torch.save(model.state_dict(), '/om2/group/cbmm/data/best_model.pth')
+            torch.save(model.state_dict(), './model/best_model.pth')
 
-        if epoch % 1 == 0:
-            avg_dist = RBFNetwork.average_distance(model.module.blocks[0].mlp.centers)
-            print(f'Epoch {epoch+1}, Average distance between centers: {avg_dist.item()}')
-        
         if args.wandb:
             wandb.log({
                 "Epoch": epoch,
@@ -801,58 +528,8 @@ def train(model, epochs):
         print('Train Loss: %.3f | Train Acc: %.3f%% (%d/%d)' % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
         print('Val Acc: %.3f%%' % val_acc)
         print('Best Acc: %.3f%%' % best_acc)
-    return beta_mean_history_list, scaler_mean_history_list
 
 
-def print_parameters_count(model):
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    print(f"Total parameters: {total_params}")
-    print(f"Trainable parameters: {trainable_params}")
-
-
-class TinyImageNet(datasets.VisionDataset):
-    def __init__(self, root, split='train', transform=None, target_transform=None):
-        super().__init__(root, transform=transform, target_transform=target_transform)
-
-        self.split = split
-        self.data = []
-        self.targets = []
-
-        wnid_to_idx = {}
-        with open(os.path.join(root, 'wnids.txt'), 'r') as f:
-            for idx, line in enumerate(f):
-                wnid_to_idx[line.strip()] = idx
-
-        if split == 'train':
-            for wnid, idx in wnid_to_idx.items():
-                for i in range(500):
-                    path = os.path.join(root, 'train', wnid, 'images', '{}_{}.JPEG'.format(wnid, i))
-                    self.data.append(path)
-                    self.targets.append(idx)
-        elif split == 'val':
-            with open(os.path.join(root, 'val', 'val_annotations.txt'), 'r') as f:
-                for line in f:
-                    parts = line.split()
-                    path = os.path.join(root, 'val', 'images', parts[0])
-                    self.data.append(path)
-                    self.targets.append(wnid_to_idx[parts[1]])
-
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        path = self.data[idx]
-        target = self.targets[idx]
-        image = Image.open(path).convert('RGB')
-
-        if self.transform:
-            image = self.transform(image)
-        if self.target_transform:
-            target = self.target_transform(target)
-
-        return image, target
 
 
 if __name__ == "__main__":
@@ -864,7 +541,7 @@ if __name__ == "__main__":
     parser.add_argument("--patch_size", required=True, default=4, type=int)
     parser.add_argument("--image_size", required=True, default=32, type=int)
     parser.add_argument("--hyperbf", action='store_true', default=False, help='if using all hyperBF structures')
-    parser.add_argument("--wandb", action='store_true', default=False, help='if using wandb')
+    parser.add_argument("--wandb", action='store_true', default=True, help='if using wandb')
     parser.add_argument("--classes", required=True, default=10, type=int)
     parser.add_argument("--train_batch", required=True, default=256, type=int)
     parser.add_argument("--lr", required=True, default=1e-4, type=float)
@@ -917,45 +594,26 @@ if __name__ == "__main__":
                             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
                         ])
 
-    if args.dataset == 'tiny_imagenet':
-        train_dataset = TinyImageNet('/om2/group/cbmm/data', split='train', transform=transform_tinyimagenet_train)
-        trainloader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4)
-        val_dataset = TinyImageNet('/om2/group/cbmm/data', split='val', transform=transform_tinyimagenet_val)
-        valloader = DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=4)
-
     if args.dataset == 'imagenet':
         print("loading the imagenet dataset")
-        trainset = datasets.ImageFolder(root='/om/data/public/imagenet/images_complete/ilsvrc/train', transform=transform_imagenet)
-        valset = datasets.ImageFolder(root='/om/data/public/imagenet/images_complete/ilsvrc/val', transform=transform_imagenet)
-        
-        if args.distributed:
-            train_sampler = DistributedSampler(trainset)
-            val_sampler = DistributedSampler(valset)
-            
-            trainloader = DataLoader(trainset, batch_size=args.train_batch, sampler=train_sampler, num_workers=8)
-            valloader = DataLoader(valset, batch_size=args.train_batch, sampler=val_sampler, num_workers=8)
-        
-        else:
-            trainloader = DataLoader(trainset, batch_size=args.train_batch, shuffle=True, num_workers=8)
-            valloader = DataLoader(valset, batch_size=args.train_batch, shuffle=False, num_workers=8)
-        
-        print("successfully loaded the dataset!")
-    
+        trainset = datasets.ImageFolder(root='./data', transform=transform_imagenet)
+        valset = datasets.ImageFolder(root='./data', transform=transform_imagenet)
+        train_sampler = DistributedSampler(trainset)
+        val_sampler = DistributedSampler(valset)
+        trainloader = DataLoader(trainset, batch_size=args.train_batch, sampler=train_sampler, num_workers=8)
+        valloader = DataLoader(valset, batch_size=args.train_batch, sampler=val_sampler, num_workers=8)
     
     if args.dataset == 'cifar10':
-        trainset    = datasets.CIFAR10(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
+        trainset    = datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_train)
+        valset      = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_val)
+        testset     = datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_val)
+        
+        train_sampler   = DistributedSampler(trainset)
+        val_sampler     = DistributedSampler(valset)
+        test_sampler     = DistributedSampler(testset)
+        
         trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
-        valset      = datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
         valloader   = DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
-        testset     = datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
-        testloader  = DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
-    
-    if args.dataset == 'cifar100':
-        trainset    = datasets.CIFAR100(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
-        trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
-        valset      = datasets.CIFAR100(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
-        valloader   = DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
-        testset     = datasets.CIFAR100(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
         testloader  = DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
         
 
@@ -992,51 +650,21 @@ if __name__ == "__main__":
     model = model.to(device)
     print(f"Model is on: {next(model.parameters()).device}")
     
-    if args.distributed:
-        model       = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        if args.hyperbf:
-            model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=True)
-        else:
-            model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=True)
-    print_parameters_count(model)
+    model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=True)
 
     ## setup loss, optimizer, etc
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 10)
-    # scheduler_warmup = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: epoch / 10)  # 10 epochs的预热
-    # scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)  # 根据验证损失调整学习率
+    scheduler_warmup = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: epoch / 10)
+    scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
     scaler = torch.cuda.amp.GradScaler(enabled=True)
 
     ## train
-    print("start to train!")
     beta, scaler = train(model, args.epoch)
-    
-    print("beta:", beta)
-    print("scaler:", scaler)
-    
-    # for idx, block in enumerate(model.blocks):
-    #     if idx == 0:
-    #         beta_mean_history = [sum(block.mlp.beta_mean_history) / len(block.mlp.beta_mean_history)]
-    #         scaler_mean_history = block.attn.scaler_mean_history
-    #         print(f"Hyper_Block {idx} beta_mean_history: {beta_mean_history}")
-    #         print(f"Block {idx + 1} scaler_mean_history:{block.attn.scaler_mean_history}")
 
-    
     if args.dataset == 'cifar10' or 'cifar100':
         test_acc = evaluate(testloader)
         print('Test Acc: %.3f%%' % test_acc)
-    torch.cuda.empty_cache()
-    
-    if args.vis:
-        path            = '/lustre/grp/gyqlab/lism/brt/language-vision-interface/N-W-estimator/vision-transformers-cifar10/corgi_image.jpg'
-        img             = Image.open(path)
-        factor_reduce   = 2
-        img_size        = tuple(np.array(img.size[::-1]) // factor_reduce)
-        model.to('cpu')
-        device          =  torch.device("cpu")
-        ma              = visualize_predict(model, img, img_size, args.path_size, device)
-        visualize_and_save_matrix(ma.detach().cpu().numpy())
-    
     if args.wandb:
         wandb.finish()
