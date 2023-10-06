@@ -1,4 +1,5 @@
 import torch
+import os
 from torch.autograd import Variable
 import torch.optim as optim
 import time
@@ -21,7 +22,7 @@ def visualize_M(M, idx):
     F = np.rollaxis(F, 0, 3)
     plt.imshow(F)
     plt.axis('off')
-    plt.savefig('./video_logs/' + str(idx).zfill(6) + '.png',
+    plt.savefig('./imgs/video_logs/' + str(idx).zfill(6) + '.png',
                 bbox_inches='tight', pad_inches = 0)
     return F
 
@@ -51,7 +52,7 @@ def train_network(train_loader, val_loader, test_loader,
     num_epochs = 501
     best_val_acc = 0
     best_test_acc = 0
-    best_val_loss = np.float("inf")
+    best_val_loss = float("inf")
     best_test_loss = 0
 
     for i in range(num_epochs):
@@ -69,9 +70,12 @@ def train_network(train_loader, val_loader, test_loader,
             d = {}
             d['state_dict'] = net.state_dict()
             if name is not None:
-                torch.save(d, 'nn_models/' + name + '_trained_nn_' + str(i) + '.pth')
+                directory = '/om2/group/cbmm/nn_models'
+                if not os.path.exists(directory):
+                    os.makedirs(directory)
+                torch.save(d, directory + name + '_trained_nn_' + str(i) + '.pth')
             else:
-                torch.save(d, 'nn_models/trained_nn.pth')
+                torch.save(d, os.path.join(directory, 'trained_nn.pth'))
             net.cuda()
 
         train_loss = train_step(net, optimizer, train_loader, save_frames=save_frames)
@@ -125,6 +129,8 @@ def train_step(net, optimizer, train_loader, save_frames=False):
         targets = labels
         output = net(Variable(inputs).cuda())
         target = Variable(targets).cuda()
+        print('output.shape:', output.shape)
+        print('target.shape', target.shape)
         loss = torch.mean(torch.pow(output - target, 2))
         loss.backward()
         optimizer.step()

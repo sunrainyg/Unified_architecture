@@ -11,12 +11,9 @@ from sklearn.model_selection import train_test_split
 from torch.linalg import norm
 from random import randint
 import visdom
-import eigenpro_rtfm as erfm
+import matplotlib.pyplot as plt
 import hickle
 import neural_model
-
-vis = visdom.Visdom('http://127.0.0.1', use_incoming_socket=False)
-vis.close(env='main')
 
 SEED = 5636
 torch.manual_seed(SEED)
@@ -48,15 +45,22 @@ def one_hot_data(dataset, num_samples=-1):
     adjusted = []
 
     count = 0
+    
     for idx, (ex, label) in enumerate(subset):
         ex[:, 2:7, 7:12] = 0.
         if label == 9:
             count += 1
             ex[:, 2:7, 7:12] = 1.
         if idx < 10:
-            vis.image(ex)
+            plt.imshow(np.transpose(ex, (1, 2, 0)))
+            filename = f"imgs/img_logs/image_{idx}.png"
+            plt.savefig(filename)
+            print(f"Image saved as {filename}")
+            
+            plt.show()
         ex = ex.flatten()
         adjusted.append((ex, labelset[label]))
+
     return adjusted
 
 def split(trainset, p=.8):
@@ -115,7 +119,7 @@ def main():
     name = 'grokking'
     rfm.rfm(trainloader, valloader, testloader,
             name=name,
-            iters=5,
+            iters=1,
             train_acc=True, reg=1e-3)
 
     t.train_network(trainloader, valloader, testloader,

@@ -1,4 +1,5 @@
 import numpy as np
+import os
 import torch
 from numpy.linalg import solve
 import classic_kernel
@@ -109,7 +110,9 @@ def rfm(train_loader, val_loader, test_loader,
 
         M  = get_grads(X_train, sol, L, torch.from_numpy(M), batch_size=batch_size)
         if name is not None:
-            hickle.dump(M, 'saved_Ms/M_' + name + '_' + str(i) + '.h')
+            if not os.path.exists('/om2/group/cbmm/saved_Ms'):
+                os.makedirs('/om2/group/cbmm/saved_Ms')
+            hickle.dump(M, '/om2/group/cbmm/saved_Ms/M_' + name + '_' + str(i) + '.h')
 
     K_train = laplace_kernel_M(X_train, X_train, L, torch.from_numpy(M)).numpy()
     sol = solve(K_train + reg * np.eye(len(K_train)), y_train).T
