@@ -302,7 +302,7 @@ class Hyper_Block(nn.Module):
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(1500)
+        mlp_hidden_dim = int(3000)
         self.mlp = RBFNetwork(dim, mlp_hidden_dim, dim)
 
     def forward(self, x, return_attention=False):
@@ -785,7 +785,7 @@ def train(model, epochs):
             best_acc = val_acc
             torch.save(model.state_dict(), '/om2/group/cbmm/data/best_model.pth')
 
-        if epoch % 1 == 0:
+        if epoch % 10 == 0:
             avg_dist = RBFNetwork.average_distance(model.module.blocks[0].mlp.centers)
             print(f'Epoch {epoch+1}, Average distance between centers: {avg_dist.item()}')
         
