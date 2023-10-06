@@ -16,21 +16,9 @@ We discovered a unified architectures that share similar performance with Transf
 ## Links
 * [Project Page](https://github.com) 
 * [ColabDemo](https://colab.research.google.com/)
-* [Paper](https://arxiv.or)
+* [Paper](https://cbmm.mit.edu/sites/default/files/publications/CBMM-Memo-143.pdf)
 
 
-## Citation
-
-If you find our work useful in your research, please cite:
-
-```BiBTeX
-@article{,
-  title={{}},
-  author={},
-  journal={},
-  year={2023}
-}
-```
 ## Set up the environments
 Install dependencies by running:
 ```shell
@@ -52,9 +40,20 @@ See [Getting Start](GETTING_STARTED.md) for detailed instructions on training an
 * Run the demo on Google Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com)
 
 
-
 ## Acknowledgement
 
-Code is largely based on [Vision Transformer](https://github.com/).
+Code is partly based on [Vision Transformer](https://github.com/).
 
-Thank you, for the great open-source project!
+
+## Citation
+
+If you find our work useful in your research, please cite:
+
+```BiBTeX
+@techreport{gan2023homogeneous,
+  title={A Homogeneous Transformer Architecture},
+  author={Gan, Yulu and Poggio, Tomaso},
+  year={2023},
+  institution={Center for Brains, Minds and Machines (CBMM)}
+}
+```
