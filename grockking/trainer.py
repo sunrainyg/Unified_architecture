@@ -5,9 +5,11 @@ import torch.optim as optim
 import time
 import neural_model
 import matplotlib
+import torch.nn as nn
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+import wandb
 
 
 def visualize_M(M, idx):
@@ -31,7 +33,9 @@ def train_network(train_loader, val_loader, test_loader,
                   num_classes=2, name=None,
                   save_frames=False):
 
-
+    # Initialize wandb
+    wandb.init(project="grockking_new", name=name)
+    
     for idx, batch in enumerate(train_loader):
         inputs, labels = batch
         _, dim = inputs.shape
@@ -46,11 +50,12 @@ def train_network(train_loader, val_loader, test_loader,
             params += size
     print("NUMBER OF PARAMS: ", params)
 
-    optimizer = torch.optim.SGD(net.parameters(), lr=.1)
+    optimizer = torch.optim.Adam(net.parameters(), lr=10e-4)
 
     net.cuda()
-    num_epochs = 501
+    num_epochs = 400
     best_val_acc = 0
+    best_train_acc = 0
     best_test_acc = 0
     best_val_loss = float("inf")
     best_test_loss = 0
@@ -84,22 +89,40 @@ def train_network(train_loader, val_loader, test_loader,
         train_acc = get_acc(net, train_loader)
         val_acc = get_acc(net, val_loader)
         test_acc = get_acc(net, test_loader)
+        
+        if train_acc >= best_train_acc:
+            best_train_acc = train_acc
+        
+        if test_acc >= best_test_acc:
+            best_test_acc = test_acc
 
         if val_acc >= best_val_acc:
             best_val_acc = val_acc
-            best_test_acc = test_acc
             net.cpu()
             d = {}
             d['state_dict'] = net.state_dict()
             if name is not None:
-                torch.save(d, 'nn_models/' + name + '_trained_nn.pth')
+                directory = '/om2/group/cbmm/nn_models'
+                if not os.path.exists(directory):
+                    os.makedirs(directory)
+                torch.save(d, directory + name + '_trained_nn.pth')
             else:
-                torch.save(d, 'nn_models/trained_nn.pth')
+                torch.save(d, os.path.join(directory, 'trained_nn.pth'))
             net.cuda()
 
         if val_loss <= best_val_loss:
             best_val_loss = val_loss
             best_test_loss = test_loss
+            
+        wandb.log({
+            "Epoch": i,
+            "Train Loss": train_loss,
+            "Validation Loss": best_val_loss,
+            "Test Loss": best_test_loss,
+            "Train Accuracy": best_train_acc,
+            "Validation Accuracy": best_val_acc,
+            "Test Accuracy": best_test_acc,
+        })
 
         print("Epoch: ", i,
               "Train Loss: ", train_loss, "Test Loss: ", test_loss,

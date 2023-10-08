@@ -18,13 +18,16 @@ class Nonlinearity(torch.nn.Module):
 
 class Net(nn.Module):
 
-    def __init__(self, dim, num_classes=2):
+    def __init__(self, dim, num_classes=10):
         super(Net, self).__init__()
         bias = False
         k = 1024
         self.dim = dim
         self.width = k
         self.first = nn.Linear(dim, k, bias=bias)
+        
+        nn.init.normal_(self.first.weight, std=5e-3)
+        
         self.fc = nn.Sequential(Nonlinearity(),
                                 nn.Linear(k, k, bias=bias),
                                 Nonlinearity(),
