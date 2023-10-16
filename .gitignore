@@ -60,6 +60,7 @@ coverage.xml
 # Django stuff:
 *.log
 *.txt
+*.png
 
 # Sphinx documentation
 docs/_build/
@@ -69,3 +70,6 @@ target/
 logs/
 main_copy.py
 grockking/logs/
+next_token_pred/data
+next_token_pred/runs
+vqtorch/

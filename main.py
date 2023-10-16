@@ -1,4 +1,5 @@
 import torch
+from vqtorch.nn import VectorQuant
 import numpy as np
 import math
 import torch.nn as nn
@@ -61,56 +62,7 @@ class DropPath(nn.Module):
         return drop_path(x, self.drop_prob, self.training)
 
 
-# class RBFNetwork(nn.Module):
-#     def __init__(self, in_features, hidden_features=None, out_features=None):
-#         super().__init__()
-#         out_features = out_features or in_features
-#         hidden_features = hidden_features or in_features
-        
-#         self.M_RBF = nn.Parameter(torch.eye(768), requires_grad=True)
-#         self.centers = nn.Parameter(torch.randn(hidden_features, in_features))
-#         self.beta = nn.Parameter(torch.ones(hidden_features) * 0.1)  # scale factor
-#         self.L  = nn.Parameter(torch.randn(in_features, in_features))
-        
-#         self.fc1 = nn.Linear(hidden_features, hidden_features)
-#         self.fc2 = nn.Linear(hidden_features, out_features)
-
-#     def radial_function(self, x): #欧式距离
-#         # Compute the distance from the centers
-#         A = x.pow(2).sum(dim=-1, keepdim=True)
-#         B = self.centers.pow(2).sum(dim=1)
-#         C = 2 * x @ self.centers.t()
-#         distances = A - C + B
-#         return torch.exp(-self.beta.unsqueeze(0) * distances)
-
-    # def radial_function(self, x): #马氏距离
-    #     # Compute the Mahalanobis distance from the centers using the decomposition method
-
-    #     # 1. Compute x^T M x
-    #     x_M = x @ self.M_RBF
-    #     xMx = (x * x_M).sum(dim=-1, keepdim=True)  # Assuming x is of shape [batch_size, dim]
-
-    #     # 2. Compute centers^T M centers
-    #     centers_M = self.centers @ self.M_RBF
-    #     centersMcenters = (self.centers * centers_M).sum(dim=-1)  # Assuming centers is of shape [num_centers, dim]
-
-    #     # 3. Compute -2 x^T M centers
-    #     xMcenters = x_M @ self.centers.t()  # Assuming x is of shape [batch_size, dim] and centers is of shape [num_centers, dim]
-    #     negative_2xMcenters = -2 * xMcenters
-
-    #     # Combine all components to get Mahalanobis distance
-    #     distances = xMx + centersMcenters + negative_2xMcenters
-
-    #     return torch.exp(-self.beta.unsqueeze(0) * distances)
-
-
-    # def forward(self, x):
-    #     x = self.radial_function(x)
-    #     x = F.relu(self.fc1(x))
-    #     x = self.fc2(x)
-    #     return x
-
-class RBFNetwork(nn.Module):
+class RBFNetwork_bak(nn.Module):
     def __init__(self, in_features, center_feature=None, out_features=None, drop=0.):
         super().__init__()
         out_features = out_features or in_features
@@ -123,7 +75,7 @@ class RBFNetwork(nn.Module):
         self.fc = nn.Linear(center_feature, out_features) # set bias as false
         self.drop = nn.Dropout(drop)
 
-
+    
     def radial_function(self, x): #欧式距离
         # Compute the distance from the centers
         A = x.pow(2).sum(dim=-1, keepdim=True)
@@ -174,12 +126,41 @@ class RBFNetwork(nn.Module):
     def save_epoch_value(self):
         current_beta_mean = self.beta.mean().item()
         self.beta_mean_history.append(current_beta_mean)
+        
+
+class ModifiedLaplaceActivation(nn.Module):
+    def __init__(self, sigma=1.0):
+        super(ModifiedLaplaceActivation, self).__init__()
+        self.sigma = sigma
+
+    def forward(self, x):
+        negative_mask = (x < 0).float()
+        positive_mask = 1 - negative_mask
+        return positive_mask * x + negative_mask * torch.exp(-torch.abs(x) / self.sigma)
+
+
+class RBFNetwork(nn.Module):
+    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=ModifiedLaplaceActivation, drop=0.):
+        super().__init__()
+        hidden_features = int(1000)
+        out_features = out_features or in_features
+        hidden_features = hidden_features or in_features
+        self.fc1 = nn.Linear(in_features, hidden_features)
+        self.act = act_layer()
+        self.fc2 = nn.Linear(hidden_features, out_features)
+        self.drop = nn.Dropout(drop)
+
+    def forward(self, x): 
+        x = self.fc1(x) 
+        x = self.act(x) 
+        x = self.fc2(x) 
+        return x
 
 
 class Mlp(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.ReLU, drop=0.):
         super().__init__()
-        hidden_features = int(1500)
+        hidden_features = int(1000)
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
         self.fc1 = nn.Linear(in_features, hidden_features)
@@ -302,7 +283,7 @@ class Hyper_Block(nn.Module):
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(3000)
+        mlp_hidden_dim = int(1000)
         self.mlp = RBFNetwork(dim, mlp_hidden_dim, dim)
 
     def forward(self, x, return_attention=False):
@@ -392,6 +373,9 @@ class Hyper_ViT(nn.Module):
         trunc_normal_(self.pos_embed, std=.02)
         trunc_normal_(self.cls_token, std=.02)
         self.apply(self._init_weights)
+        
+    def get_all_rbf_layers(self):
+        return [block.mlp for block in self.blocks]
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -724,9 +708,11 @@ def evaluate(loader):
         
     return 100.*correct/total, val_loss
 
+
 def get_lr(optimizer):
     lrs = [param_group['lr'] for param_group in optimizer.param_groups]
     return lrs
+
 
 def train(model, epochs):
     global best_acc
@@ -750,9 +736,11 @@ def train(model, epochs):
             print(f"Processing batch {batch_idx+1}/{len(trainloader)}", end="\r")
 
             inputs, targets = inputs.to(device), targets.to(device)
+            
             with torch.cuda.amp.autocast(enabled=False):
                 outputs = model(inputs)
                 loss = criterion(outputs, targets)
+                
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -785,9 +773,10 @@ def train(model, epochs):
             best_acc = val_acc
             torch.save(model.state_dict(), '/om2/group/cbmm/data/best_model.pth')
 
-        if epoch % 10 == 0:
-            avg_dist = RBFNetwork.average_distance(model.module.blocks[0].mlp.centers)
-            print(f'Epoch {epoch+1}, Average distance between centers: {avg_dist.item()}')
+        # if args.hyperbf:
+        #     if epoch % 10 == 0:
+        #         avg_dist = RBFNetwork.average_distance(model.module.blocks[0].mlp.centers)
+        #         print(f'Epoch {epoch+1}, Average distance between centers: {avg_dist.item()}')
         
         if args.wandb:
             wandb.log({
@@ -995,7 +984,7 @@ if __name__ == "__main__":
     if args.distributed:
         model       = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if args.hyperbf:
-            model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=True)
+            model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=False)
         else:
             model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=True)
     print_parameters_count(model)

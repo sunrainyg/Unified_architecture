@@ -2,9 +2,10 @@
     Simple PixelCNN with softmax.
 
 """
-
+import os
 import torch
-import numpy as np 
+import numpy as np
+from torchvision.utils import save_image
 
 from torch import nn
 from torch.utils.tensorboard import SummaryWriter
@@ -16,7 +17,6 @@ import matplotlib.pyplot as plt
 
 from load_data import load_data
 import argparse 
-from test_case import compute_nll
 
 def compute_nll(output, images):
     """
@@ -97,23 +97,22 @@ class PixelCNN(nn.Module):
         return self.out(x)
 
 
-def visualize_weights(conv_layer):
-    # 获取权重
-    weights = conv_layer.weight.data.cpu().numpy()
+def visualize_weights(model, layer_idx):
+    # 获取指定层的权重
+    weights = model.convs[layer_idx].weight.data
+    # 计算每个卷积核权重的绝对值的平均，这将为我们提供一个权重的粗略估计
+    avg_weights = torch.mean(torch.abs(weights), dim=1)
     
-    # 为简单起见，只展示第一个输出通道的权重
-    # 因为每个输出通道可能关注于不同的特征
-    weights_to_show = weights[0, 0, :, :]
-    
-    plt.imshow(weights_to_show, cmap='coolwarm', vmin=-0.5, vmax=0.5)
+    # 这里我们只考虑第一个输出通道的权重，您可以修改以考虑其他通道
+    plt.imshow(avg_weights[0].cpu(), cmap='hot', interpolation='nearest')
     plt.colorbar()
-    plt.show()
+    plt.title(f'Visualization of weights for layer {layer_idx}')
+    plt.savefig("vis.jpg")
 
 
 def main(args):
     title = str(vars(args))
     print(title)
-    writer  = SummaryWriter(comment=title)
 
     layers       = args.nlayers 
     kernel       = args.ksize 
@@ -155,7 +154,6 @@ def main(args):
             loss.backward()
             optimizer.step()
 
-            writer.add_scalar("Loss/nll", loss, global_step=global_step)
             print("\r[%i / %i] nll=%.4f "%(global_step % len(trainloader), len(trainloader), loss.item()), end="", flush=True)
 
             if global_step % 100 == 0:
@@ -167,7 +165,7 @@ def main(args):
                         out             = net(sample)
                         probs           = nn.functional.softmax(out[:,:,i,j], dim=-1).data
                         sample[:,:,i,j] = torch.multinomial(probs, 1).float() / 255.0
-                writer.add_image("Image/sample", torchvision.utils.make_grid(sample), global_step=global_step)
+                save_image(sample, f'generated_sample_{global_step}.png', nrow=10)
 
                 # Do inpainting pixel by pixel. 
                 sample = torch.zeros(10, 1, 28, 28, device='cuda')
@@ -177,7 +175,7 @@ def main(args):
                         out             = net(sample)
                         probs           = nn.functional.softmax(out[:,:,i,j], dim=-1).data
                         sample[:,:,i,j] = torch.multinomial(probs, 1).float() / 255.0
-                writer.add_image("Image/inpaint", torchvision.utils.make_grid(sample), global_step=global_step)
+                save_image(sample, f'generated_inpaint_{global_step}.png', nrow=10)
                 net.train()
 
             global_step  += 1
@@ -186,8 +184,11 @@ def main(args):
         print('Epoch: '+str(epoch)+' Over!')
 
         #Saving the model
-        #os.makedirs('models', exist_ok=True)
-        #torch.save(net.state_dict(), 'models/%i_%s.pth'%(epoch, title))
+        if epoch % 50 == 0:
+            os.makedirs('/om2/group/cbmm/model', exist_ok=True)
+            torch.save(net.state_dict(), '/om2/group/cbmm/model/%i_%s.pth'%(epoch, title))
+        
+    visualize_weights(net, 0)
 
 
 
@@ -199,20 +200,12 @@ if __name__=="__main__":
     parser.add_argument('--channels',   default=64,      type=int,      help='Channels')
     parser.add_argument('--bs',         default=128,     type=int,      help='Batch Size')
     parser.add_argument('--lr',         default=0.001,   type=float,    help='Learning Rate')
-    parser.add_argument('--epochs',     default=100,     type=int,      help='Epochs')
+    parser.add_argument('--epochs',     default=10,     type=int,      help='Epochs')
     parser.add_argument('--ds',         default="mnist", type=str,      help='Dataset "mnist", "celeb" or "cifar".')
 
     args = parser.parse_args()
 
     main(args)
-    
-    # # 假设你已经有了一个训练过的PixelCNN模型，net
-    # # 可视化第一层的权重
-    # visualize_weights(net.Conv2d_1)
-
-    # # 可视化其他层的权重（例如第2层）
-    # visualize_weights(net.convs[1])
-
 
 
 

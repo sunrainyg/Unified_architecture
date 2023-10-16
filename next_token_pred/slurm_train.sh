@@ -9,13 +9,4 @@
 #SBATCH --time=96:00:00
 #SBATCH --partition=cbmm
 
-python -m torch.distributed.launch --nproc_per_node 4 --use_env --master_port 29301 main.py \
---dataset imagenet \
---epoch 100 \
---classes 1000 \
---image_size 224 \
---patch_size 16 \
---train_batch 512 \
---lr 0.0005 \
---hyperbf
-
+python train.py
