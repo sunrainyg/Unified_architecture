@@ -329,7 +329,7 @@ if __name__ == '__main__':
     DROPOUT = .1
     lr = 3e-4 * 5
     
-    epochs = 50
+    epochs = 20
     print_loss = 100
     plot_loss = 100
     loss_list = []

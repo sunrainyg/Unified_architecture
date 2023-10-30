@@ -62,7 +62,7 @@ class DropPath(nn.Module):
         return drop_path(x, self.drop_prob, self.training)
 
 
-class RBFNetwork_bak(nn.Module):
+class RBFNetwork(nn.Module):
     def __init__(self, in_features, center_feature=None, out_features=None, drop=0.):
         super().__init__()
         out_features = out_features or in_features
@@ -75,7 +75,6 @@ class RBFNetwork_bak(nn.Module):
         self.fc = nn.Linear(center_feature, out_features) # set bias as false
         self.drop = nn.Dropout(drop)
 
-    
     def radial_function(self, x): #欧式距离
         # Compute the distance from the centers
         A = x.pow(2).sum(dim=-1, keepdim=True)
@@ -116,9 +115,8 @@ class RBFNetwork_bak(nn.Module):
                     dists[i, j] = torch.norm(centers[i] - centers[j])
         return dists.sum() / (n * (n - 1))
 
-
     def forward(self, x):
-        x = self.radial_function(x)
+        x = self.radial_function_ma(x)
         x = self.fc(x)
         x = self.drop(x)
         return x
@@ -126,7 +124,7 @@ class RBFNetwork_bak(nn.Module):
     def save_epoch_value(self):
         current_beta_mean = self.beta.mean().item()
         self.beta_mean_history.append(current_beta_mean)
-        
+
 
 class ModifiedLaplaceActivation(nn.Module):
     def __init__(self, sigma=1.0):
@@ -139,7 +137,7 @@ class ModifiedLaplaceActivation(nn.Module):
         return positive_mask * x + negative_mask * torch.exp(-torch.abs(x) / self.sigma)
 
 
-class RBFNetwork(nn.Module):
+class RBFNetwork_bak(nn.Module):
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=ModifiedLaplaceActivation, drop=0.):
         super().__init__()
         hidden_features = int(1000)
@@ -158,6 +156,7 @@ class RBFNetwork(nn.Module):
 
 
 class Mlp(nn.Module):
+    
     def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.ReLU, drop=0.):
         super().__init__()
         hidden_features = int(1000)
@@ -283,7 +282,7 @@ class Hyper_Block(nn.Module):
         self.drop_path = DropPath(
             drop_path) if drop_path > 0. else nn.Identity()
         self.norm2 = norm_layer(dim)
-        mlp_hidden_dim = int(1000)
+        mlp_hidden_dim = int(11)
         self.mlp = RBFNetwork(dim, mlp_hidden_dim, dim)
 
     def forward(self, x, return_attention=False):
@@ -429,6 +428,13 @@ class Hyper_ViT(nn.Module):
             x = blk(x)
         x = self.norm(x) # torch.Size([256, 65, 768])
         return self.head(x[:, 0])
+
+    def extract_features(self, x):
+        x = self.prepare_tokens(x)
+        for blk in self.blocks:
+            x = blk(x)
+        x = self.norm(x)
+        return x
 
     def get_last_selfattention(self, x):
         x = self.prepare_tokens(x)
@@ -598,7 +604,8 @@ def visualize_attention(model, img, patch_size, device):
     w_featmap = img.shape[-2] // patch_size
     h_featmap = img.shape[-1] // patch_size
 
-    attentions, ma = model.get_last_selfattention(img.to(device))
+    attentions, ma = model.module.get_last_selfattention(img.to(device))
+
 
     nh = attentions.shape[1]  # number of head
 
@@ -755,6 +762,7 @@ def train(model, epochs):
         
         train_acc = 100.*correct/total
         val_acc, val_loss   = evaluate(valloader)
+        
         # scheduler_plateau.step(val_loss)
         ## print beta and scaler; need to add "module" when using DDP
         # if args.hyperbf:
@@ -771,12 +779,7 @@ def train(model, epochs):
         
         if val_acc > best_acc:
             best_acc = val_acc
-            torch.save(model.state_dict(), '/om2/group/cbmm/data/best_model.pth')
-
-        # if args.hyperbf:
-        #     if epoch % 10 == 0:
-        #         avg_dist = RBFNetwork.average_distance(model.module.blocks[0].mlp.centers)
-        #         print(f'Epoch {epoch+1}, Average distance between centers: {avg_dist.item()}')
+            torch.save(model.state_dict(), '/om/user/yulu_gan/model/hyperbf_{}_best_depth4_head8_patch4.pth'.format(args.dataset))
         
         if args.wandb:
             wandb.log({
@@ -848,9 +851,12 @@ if __name__ == "__main__":
     
     parser = ArgumentParser()
     parser.add_argument("--dataset", required=True, default='cifar10', type=str)
+    parser.add_argument("--test", action='store_true', default=False,)
     parser.add_argument("--epoch", required=True, default=5, type=int)
     parser.add_argument("--vis", action='store_true', default=False, help='if doing visualization of attn. weights')
     parser.add_argument("--patch_size", required=True, default=4, type=int)
+    parser.add_argument("--depth", required=True, default=4, type=int)
+    parser.add_argument("--heads", required=True, default=4, type=int)
     parser.add_argument("--image_size", required=True, default=32, type=int)
     parser.add_argument("--hyperbf", action='store_true', default=False, help='if using all hyperBF structures')
     parser.add_argument("--wandb", action='store_true', default=False, help='if using wandb')
@@ -907,9 +913,9 @@ if __name__ == "__main__":
                         ])
 
     if args.dataset == 'tiny_imagenet':
-        train_dataset = TinyImageNet('/om2/group/cbmm/data', split='train', transform=transform_tinyimagenet_train)
+        train_dataset = TinyImageNet('/om/user/yulu_gan/data', split='train', transform=transform_tinyimagenet_train)
         trainloader = DataLoader(train_dataset, batch_size=128, shuffle=True, num_workers=4)
-        val_dataset = TinyImageNet('/om2/group/cbmm/data', split='val', transform=transform_tinyimagenet_val)
+        val_dataset = TinyImageNet('/om/user/yulu_gan/data', split='val', transform=transform_tinyimagenet_val)
         valloader = DataLoader(val_dataset, batch_size=128, shuffle=False, num_workers=4)
 
     if args.dataset == 'imagenet':
@@ -932,19 +938,19 @@ if __name__ == "__main__":
     
     
     if args.dataset == 'cifar10':
-        trainset    = datasets.CIFAR10(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
+        trainset    = datasets.CIFAR10(root='/om/user/yulu_gan/data', train=True, download=True, transform=transform_train)
         trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
-        valset      = datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        valset      = datasets.CIFAR10(root='/om/user/yulu_gan/data', train=False, download=True, transform=transform_val)
         valloader   = DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
-        testset     = datasets.CIFAR10(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        testset     = datasets.CIFAR10(root='/om/user/yulu_gan/data', train=False, download=True, transform=transform_val)
         testloader  = DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
     
     if args.dataset == 'cifar100':
-        trainset    = datasets.CIFAR100(root='/om2/group/cbmm/data', train=True, download=True, transform=transform_train)
+        trainset    = datasets.CIFAR100(root='/om/user/yulu_gan/data', train=True, download=True, transform=transform_train)
         trainloader = DataLoader(trainset, batch_size=256, shuffle=True, num_workers=8)
-        valset      = datasets.CIFAR100(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        valset      = datasets.CIFAR100(root='/om/user/yulu_gan/data', train=False, download=True, transform=transform_val)
         valloader   = DataLoader(valset, batch_size=256, shuffle=False, num_workers=8)
-        testset     = datasets.CIFAR100(root='/om2/group/cbmm/data', train=False, download=True, transform=transform_val)
+        testset     = datasets.CIFAR100(root='/om/user/yulu_gan/data', train=False, download=True, transform=transform_val)
         testloader  = DataLoader(testset, batch_size=256, shuffle=False, num_workers=8)
         
 
@@ -956,8 +962,8 @@ if __name__ == "__main__":
             patch_size = args.patch_size,
             num_classes = args.classes,
             dim = 512,
-            depth = 4,
-            heads = 4,
+            depth = args.depth,
+            heads = args.heads,
             mlp_dim = 256,
             dropout = 0.1,
             emb_dropout = 0.1
@@ -982,7 +988,7 @@ if __name__ == "__main__":
     print(f"Model is on: {next(model.parameters()).device}")
     
     if args.distributed:
-        model       = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        model           = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
         if args.hyperbf:
             model       = DDP(model, device_ids=[args.gpu], find_unused_parameters=False)
         else:
@@ -993,16 +999,22 @@ if __name__ == "__main__":
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 10)
-    # scheduler_warmup = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda epoch: epoch / 10)  # 10 epochs的预热
-    # scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)  # 根据验证损失调整学习率
     scaler = torch.cuda.amp.GradScaler(enabled=True)
 
     ## train
-    print("start to train!")
-    beta, scaler = train(model, args.epoch)
+    if not args.test:
+        print("start to train!")
+        beta, scaler = train(model, args.epoch)
+        
+        print("beta:", beta)
+        print("scaler:", scaler)
     
-    print("beta:", beta)
-    print("scaler:", scaler)
+    if args.test:
+        path  = '/om/user/yulu_gan/model/hyperbf_cifar10_best_depth4_head8_patch4.pth'
+        model_state_dict = torch.load(path)
+        model.load_state_dict(model_state_dict)
+
+
     
     # for idx, block in enumerate(model.blocks):
     #     if idx == 0:
@@ -1012,19 +1024,21 @@ if __name__ == "__main__":
     #         print(f"Block {idx + 1} scaler_mean_history:{block.attn.scaler_mean_history}")
 
     
-    if args.dataset == 'cifar10' or 'cifar100':
-        test_acc = evaluate(testloader)
-        print('Test Acc: %.3f%%' % test_acc)
-    torch.cuda.empty_cache()
+    # if args.dataset == 'cifar10' or 'cifar100':
+    #     test_acc = evaluate(testloader)
+    #     print('Test Acc: %.3f%%' % test_acc)
+    # torch.cuda.empty_cache()
     
     if args.vis:
-        path            = '/lustre/grp/gyqlab/lism/brt/language-vision-interface/N-W-estimator/vision-transformers-cifar10/corgi_image.jpg'
+        path            = '/home/yulu_gan/Unified_architecture/imgs/dog.png'
         img             = Image.open(path)
+        img             = img.convert("RGB")
+
         factor_reduce   = 2
         img_size        = tuple(np.array(img.size[::-1]) // factor_reduce)
         model.to('cpu')
         device          =  torch.device("cpu")
-        ma              = visualize_predict(model, img, img_size, args.path_size, device)
+        ma              = visualize_predict(model, img, img_size, args.patch_size, device)
         visualize_and_save_matrix(ma.detach().cpu().numpy())
     
     if args.wandb:
