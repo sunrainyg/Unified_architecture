@@ -1,3 +1,10 @@
+# Copyright (c) 2023, Yulu Gan
+# Licensed under the BSD 3-clause license (see LICENSE.txt)
+# ---------------------------------------------------------------------------------
+# ** Description ** 
+#   1) HyperBF on Vision Dataset
+# --------------------------------------------------------
+
 import torch
 from vqtorch.nn import VectorQuant
 import numpy as np
