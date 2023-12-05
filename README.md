@@ -26,13 +26,11 @@ conda env create -f environment.yaml
 conda activate uniarc
 ```
 
-## Model Zoo
-
 
 ## Get Started
-See [Preparing Datasets](DATASET.md).
-
-See [Getting Start](GETTING_STARTED.md) for detailed instructions on training and inference.
+```shell
+python main.py --dataset cifar10
+```
 
 
 ## Demo
