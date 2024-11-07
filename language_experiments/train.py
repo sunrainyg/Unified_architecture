@@ -81,16 +81,15 @@ def load_dataset_from_huggingface(enc, limit_train, limit_val):
     return token_chunks_train, token_chunks_val
 
 def generate_response(prompt_text, model, enc, device, max_length=250):
-    # 将启动文本编码为token
+
     context_tokens = enc.encode(prompt_text)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    # 使用sample_sequence函数生成文本
+
     out = sample_sequence(
         model=model, length=max_length, context=torch.tensor(context_tokens, device=device).unsqueeze(0),
         start_token=None, batch_size=1, temperature=1.0, top_k=40, device=device
     )
     
-    # 将token解码为文本
     response = enc.decode(out[0].tolist())
     return response
 
@@ -301,10 +300,9 @@ def main():
     PATH = '/om2/group/cbmm/data/gpt2_tinystories.pth'
     torch.save(model.state_dict(), PATH)
     
-    model.eval()  # 将模型设置为评估模式
+    model.eval()
 
-    # 使用函数生成响应
-    prompt = "go on adventures and explore the world . one day , whiskers went for a walk and found a shiny , red automobile . he climbed inside and pretended to drive "  # 你可以更改这里的文本
+    prompt = "go on adventures and explore the world . one day , whiskers went for a walk and found a shiny , red automobile . he climbed inside and pretended to drive "
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     response = generate_response(prompt, model, enc, config, device)
     print(response)

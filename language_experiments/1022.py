@@ -79,7 +79,6 @@ else:
     tok.pad_token = '[PAD]'
     tok.pad_token_id = tok.convert_tokens_to_ids('[PAD]')
 
-    # 添加load_from_disk=True来显示进度条
     train = dataset['train'].map(tokenization, batched=True, batch_size=8192, writer_batch_size=8192, load_from_disk=True)
     valid = dataset['validation'].map(tokenization, batched=True, batch_size=8192, writer_batch_size=8192, load_from_disk=True)
     
